@@ -1,0 +1,1162 @@
+---
+title: |
+  ![](https://img.icons8.com/fluency/48/brain.png){width=40px}
+  **The Focus Gap**
+subtitle: |
+  Pemodelan Distraksi Digital & Kedalaman Kognitif Mahasiswa Sains Data ITERA  
+  *Pendekatan PCA-Regularized Regression*
+author: "Kelompok 6"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 4
+    number_sections: true
+    df_print: paged
+    code_folding: show
+    fig_width: 10
+    fig_height: 6
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  warning    = FALSE,
+  message    = FALSE,
+  fig.align  = "center",
+  out.width  = "100%"
+)
+```
+
+```{css, echo=FALSE}
+/* ── Custom Styling ── */
+body { font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; }
+h1, h2, h3, h4 { color: #1a5276; }
+.section-box {
+  background: #eaf4fb; border-left: 5px solid #2e86c1;
+  padding: 14px 18px; border-radius: 6px; margin: 16px 0;
+}
+.result-box {
+  background: #eafaf1; border-left: 5px solid #27ae60;
+  padding: 14px 18px; border-radius: 6px; margin: 16px 0;
+}
+.warning-box {
+  background: #fef9e7; border-left: 5px solid #f39c12;
+  padding: 14px 18px; border-radius: 6px; margin: 16px 0;
+}
+.info-tag {
+  display: inline-block; background: #2e86c1; color: white;
+  border-radius: 12px; padding: 2px 10px; font-size: 0.82em;
+}
+pre { background: #f4f6f7; border-radius: 6px; }
+```
+
+------------------------------------------------------------------------
+
+::: section-box
+**Gambaran Umum Alur Analisis:**\
+`Preprocessing` ✅ → **`PCA (Reduksi Dimensi)`** → **`Ridge & Lasso Regression`** → **`Insight & Visualisasi`**
+:::
+
+------------------------------------------------------------------------
+
+# Persiapan: Library & Data
+
+## Load Library
+
+```{r libraries}
+# ── Data wrangling & statistik ──
+library(tidyverse)   # manipulasi data & ggplot2
+library(corrplot)    # heatmap korelasi
+library(ggcorrplot)  # alternatif heatmap modern
+
+# ── PCA ──
+library(factoextra)  # visualisasi PCA (biplot, scree plot, dll.)
+library(FactoMineR)  # PCA yang kaya fitur
+
+# ── Shrinkage Regression ──
+library(glmnet)      # Ridge, Lasso, ElasticNet
+library(caret)       # cross-validation
+library(Metrics)     # RMSE, MAE, R²
+
+# ── Tabel cantik ──
+library(knitr)
+library(kableExtra)
+
+set.seed(42)  # reproducibility
+cat("✅ Semua library berhasil dimuat!\n")
+```
+
+## Load Dataset
+
+```{r load-data}
+df <- read.csv("C:/Users/Adind/Downloads/focus_gap_final (1).csv", stringsAsFactors = FALSE)
+
+# Kolom fitur original (sebelum di-scale) dan yang sudah di-scale
+FEATURE_COLS <- c("Notification_Freq", "Impulsive_Check", "Multitasking_Score",
+                  "Focus_Difficulty", "Deep_Work_Dur", "Screen_Time",
+                  "Sleep_Duration", "Study_Hours",
+                  "Digital_Distraction_Index", "Productivity_Ratio",
+                  "Cognitive_Load_Score")
+
+SCALED_COLS <- paste0(FEATURE_COLS, "_scaled")
+TARGET_COL  <- "IPK"
+
+cat(sprintf("✅ Dataset dimuat: %d responden × %d kolom\n", nrow(df), ncol(df)))
+cat(sprintf("   Variabel fitur : %d\n", length(FEATURE_COLS)))
+cat(sprintf("   Variabel target: IPK  (mean=%.3f, sd=%.3f)\n",
+            mean(df$IPK), sd(df$IPK)))
+```
+
+```{r preview-data}
+df %>%
+  select(IPK, all_of(FEATURE_COLS[1:8])) %>%
+  head(6) %>%
+  kable(caption = "Preview 6 Baris Pertama Dataset (Fitur Asli)",
+        digits = 3, align = "c") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, color = "#1a5276")
+```
+
+::: result-box
+**Interpretasi Persiapan: Library & Data :** Pada tahap persiapan, seluruh library yang dibutuhkan untuk analisis berhasil dimuat. Library tersebut digunakan untuk manipulasi data, visualisasi korelasi, analisis PCA, pemodelan shrinkage regression seperti Ridge, Lasso, dan ElasticNet, serta evaluasi model menggunakan RMSE, MAE, dan R².
+
+Dataset yang digunakan berhasil dimuat dengan ukuran 121 responden dan 24 kolom. Dari dataset tersebut, terdapat 11 variabel fitur yang digunakan sebagai prediktor, sedangkan IPK digunakan sebagai variabel target. Rata-rata IPK responden adalah 3,263 dengan standar deviasi 0,493, yang menunjukkan bahwa nilai IPK responden cenderung berada di sekitar angka tersebut.
+
+Preview enam baris pertama ditampilkan untuk memastikan bahwa struktur data telah terbaca dengan benar. Variabel yang terlihat mencakup aspek distraksi digital, seperti frekuensi notifikasi, impulsivitas mengecek HP, multitasking, dan kesulitan fokus, serta aspek kebiasaan belajar seperti durasi deep work, screen time, durasi tidur, dan jam belajar. Dengan demikian, data sudah siap digunakan untuk tahap berikutnya, yaitu PCA dan pemodelan regularized regression.
+:::
+
+------------------------------------------------------------------------
+
+# Tahap 2: Reduksi Dimensi (PCA)
+
+::: section-box
+**Apa itu PCA?**\
+Principal Component Analysis (PCA) adalah teknik untuk "meringkas" banyak variabel yang saling berkorelasi menjadi beberapa **Komponen Utama (PC)** yang lebih sedikit, namun tetap mempertahankan sebagian besar informasi aslinya.
+
+Bayangkan kita punya 11 pertanyaan tentang distraksi digital — dengan PCA, kita bisa temukan *pola tersembunyi* di balik semua pertanyaan itu, misalnya: "satu faktor utama yang disebut **Gangguan Aktif**" yang mewakili notifikasi + refleks cek HP secara bersamaan.
+:::
+
+## Matriks Korelasi Pra-PCA
+
+Sebelum PCA, kita cek apakah antar variabel memang saling berkorelasi. Jika korelasinya lemah semua, PCA tidak akan banyak manfaatnya.
+
+```{r corrplot, fig.height=7, fig.cap="Heatmap Korelasi Antar Variabel Fitur"}
+X_raw <- df[, FEATURE_COLS]
+corr_mat <- cor(X_raw, use = "complete.obs")
+
+# Label pendek untuk plot
+short_labels <- c("Notif", "Impulsif", "Multitask", "FokusSulit",
+                  "DeepWork", "ScreenTime", "Tidur", "Belajar",
+                  "DDI", "ProdRatio", "CogLoad")
+
+rownames(corr_mat) <- colnames(corr_mat) <- short_labels
+
+ggcorrplot(corr_mat,
+           method   = "square",
+           type     = "lower",
+           lab      = TRUE,
+           lab_size = 3,
+           colors   = c("#c0392b", "white", "#1a5276"),
+           title    = "Korelasi Antar Variabel Fitur\n(Sebelum PCA)",
+           ggtheme  = theme_minimal(base_size = 11)) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+::: result-box
+**Interpretasi Matriks Korelasi Pra-PCA :** Matriks korelasi pra-PCA digunakan untuk melihat hubungan antarvariabel sebelum dilakukan reduksi dimensi. Berdasarkan heatmap, terlihat korelasi yang cukup kuat antara variabel-variabel distraksi digital, seperti Notif, Impulsif, Multitask, dan FokusSulit. Selain itu, variabel indeks seperti DDI dan CogLoad juga menunjukkan hubungan yang kuat dengan pola distraksi digital.
+
+Kondisi ini menjadi sinyal bahwa PCA dapat digunakan untuk meringkas pola-pola yang saling berkaitan tersebut ke dalam beberapa komponen utama, sehingga struktur data menjadi lebih sederhana namun tetap mempertahankan informasi penting.
+:::
+
+## Uji Kelayakan PCA
+
+### Bartlett's Test of Sphericity
+
+Menguji apakah matriks korelasi secara signifikan berbeda dari matriks identitas (syarat: korelasi antar variabel signifikan).
+
+```{r bartlett}
+library(psych)
+bartlett_result <- cortest.bartlett(corr_mat, n = nrow(df))
+
+cat("=== Bartlett's Test of Sphericity ===\n")
+cat(sprintf("  Chi-square : %.4f\n", bartlett_result$chisq))
+cat(sprintf("  df         : %d\n",   bartlett_result$df))
+cat(sprintf("  p-value    : %.6f\n", bartlett_result$p.value))
+cat(ifelse(bartlett_result$p.value < 0.05,
+           "\n✅ p < 0.05 → Matriks korelasi SIGNIFIKAN, PCA LAYAK dilakukan!",
+           "\n⚠️  p ≥ 0.05 → PCA mungkin kurang tepat untuk data ini."))
+```
+
+### Kaiser-Meyer-Olkin (KMO)
+
+Mengukur seberapa "murni" korelasi antar variabel (nilai \> 0.5 = layak, \> 0.7 = baik).
+
+```{r kmo}
+kmo_result <- KMO(X_raw)
+
+cat("=== Kaiser-Meyer-Olkin (KMO) Test ===\n")
+cat(sprintf("  Overall KMO : %.4f\n", kmo_result$MSA))
+
+kmo_level <- dplyr::case_when(
+  kmo_result$MSA >= 0.9 ~ "Luar biasa (Marvelous)",
+  kmo_result$MSA >= 0.8 ~ "Sangat baik (Meritorious)",
+  kmo_result$MSA >= 0.7 ~ "Baik (Middling)",
+  kmo_result$MSA >= 0.6 ~ "Cukup (Mediocre)",
+  kmo_result$MSA >= 0.5 ~ "Dapat diterima (Miserable)",
+  TRUE                  ~ "Tidak layak (Unacceptable)"
+)
+cat(sprintf("  Kategori    : %s\n", kmo_level))
+cat("\n  KMO per variabel:\n")
+print(round(kmo_result$MSAi, 3))
+```
+
+::: result-box
+**Interpretasi Uji Kelayakan PCA :** Uji kelayakan PCA dilakukan untuk melihat apakah data cukup sesuai untuk dianalisis menggunakan PCA. Pada Bartlett’s Test of Sphericity, nilai Chi-square dan p-value menghasilkan NaN, sehingga uji Bartlett tidak dapat memberikan kesimpulan yang valid. Hal ini kemungkinan terjadi karena terdapat redundansi atau hubungan yang terlalu kuat antarvariabel, terutama karena beberapa variabel indeks merupakan turunan dari variabel lain.
+
+Sementara itu, hasil uji KMO menunjukkan nilai Overall KMO = 0,5000, yang berada pada batas minimum kelayakan PCA. Artinya, PCA masih dapat dilanjutkan, tetapi hasilnya perlu ditafsirkan secara hati-hati. Dengan demikian, penggunaan PCA dalam penelitian ini lebih tepat diposisikan sebagai analisis eksploratif yang didukung oleh pola korelasi antarvariabel dan hasil variansi terjelaskan pada tahap berikutnya.
+:::
+
+## Eksekusi PCA
+
+```{r run-pca}
+X_scaled_mat <- as.matrix(df[, SCALED_COLS])
+colnames(X_scaled_mat) <- FEATURE_COLS  # nama bersih
+
+pca_result <- PCA(X_scaled_mat,
+                  scale.unit = FALSE,   # sudah di-scale di tahap preprocessing
+                  ncp        = 11,      # hitung semua PC
+                  graph      = FALSE)
+
+cat("✅ PCA selesai dijalankan!\n")
+cat(sprintf("   Input  : %d responden × %d variabel\n", nrow(X_scaled_mat), ncol(X_scaled_mat)))
+cat(sprintf("   Output : %d Principal Components\n", ncol(pca_result$ind$coord)))
+```
+
+## Scree Plot & Variansi Terjelaskan
+
+```{r scree-plot, fig.cap="Scree Plot: Seberapa Banyak Informasi Tiap PC Merangkum?"}
+eigenvalues <- pca_result$eig
+df_eigen <- data.frame(
+  PC          = paste0("PC", 1:nrow(eigenvalues)),
+  Eigenvalue  = eigenvalues[, 1],
+  Var_pct     = eigenvalues[, 2],
+  Cumul_pct   = eigenvalues[, 3]
+)
+
+# ── Scree Plot ──
+p_scree <- ggplot(df_eigen, aes(x = reorder(PC, -Eigenvalue))) +
+  geom_col(aes(y = Var_pct), fill = "#2e86c1", alpha = 0.8, width = 0.6) +
+  geom_line(aes(y = Cumul_pct, group = 1), color = "#e74c3c", linewidth = 1.1) +
+  geom_point(aes(y = Cumul_pct), color = "#e74c3c", size = 3) +
+  geom_hline(yintercept = 70, linetype = "dashed", color = "#27ae60", linewidth = 0.8) +
+  geom_text(aes(y = Var_pct + 1.5, label = sprintf("%.1f%%", Var_pct)),
+            size = 3.2, color = "#1a5276", fontface = "bold") +
+  annotate("text", x = 9, y = 72, label = "Threshold 70%",
+           color = "#27ae60", size = 3.5, fontface = "italic") +
+  labs(title    = "Scree Plot – Proporsi Variansi yang Dijelaskan Tiap PC",
+       subtitle = "Batang = variansi per PC | Garis merah = kumulatif",
+       x        = "Principal Component",
+       y        = "Variansi (%)") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        axis.text.x   = element_text(face = "bold"))
+
+print(p_scree)
+```
+
+```{r eigen-table}
+df_eigen %>%
+  mutate(across(where(is.numeric), ~round(., 3))) %>%
+  mutate(
+    Keputusan = ifelse(Eigenvalue >= 1, "✅ Dipilih (Kaiser > 1)", "❌ Dibuang"),
+    Var_pct   = paste0(Var_pct, "%"),
+    Cumul_pct = paste0(Cumul_pct, "%")
+  ) %>%
+  rename(`PC` = PC, `Eigenvalue` = Eigenvalue,
+         `Variansi (%)` = Var_pct, `Kumulatif (%)` = Cumul_pct) %>%
+  kable(caption = "Tabel Eigenvalue & Variansi Terjelaskan Tiap PC") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE) %>%
+  row_spec(which(eigenvalues[,1] >= 1), bold = TRUE, background = "#d5f5e3")
+```
+
+::: result-box
+**Kriteria Kaiser (Eigenvalue ≥ 1):** PC yang dipilih adalah yang memiliki eigenvalue ≥ 1, artinya PC tersebut menjelaskan variansi lebih dari satu variabel asli — layak dipertahankan.
+:::
+
+::: result-box
+**Interpretasi Eksekusi PCA dan Variansi Terjelaskan :** PCA dijalankan menggunakan 11 variabel fitur yang sudah di-scale. Proses PCA menghasilkan 11 Principal Components, sesuai dengan jumlah variabel yang dianalisis. Hal ini menunjukkan bahwa setiap variabel awal telah ditransformasikan menjadi komponen baru yang saling bebas dan tersusun berdasarkan besarnya informasi atau variansi yang mampu dijelaskan.
+
+Berdasarkan scree plot dan tabel eigenvalue, terlihat bahwa PC1 memiliki kontribusi terbesar dengan eigenvalue 4,473 dan mampu menjelaskan 40,662% variasi data. Selanjutnya, PC2 menjelaskan 17,964%, dan PC3 menjelaskan 11,632% variasi data. Secara kumulatif, tiga komponen pertama mampu menjelaskan sekitar 70,258% total variasi data.
+
+Dengan menggunakan kriteria Kaiser, komponen yang dipilih adalah komponen dengan eigenvalue lebih dari 1. Oleh karena itu, PC1, PC2, dan PC3 dipertahankan untuk analisis berikutnya, sedangkan PC4 sampai PC11 tidak digunakan karena memiliki eigenvalue kurang dari 1. Hasil ini menunjukkan bahwa PCA berhasil mereduksi 11 variabel awal menjadi 3 komponen utama dengan tetap mempertahankan sebagian besar informasi penting dari data.
+:::
+
+## Loading Matrix (Kontribusi Variabel ke Tiap PC)
+
+```{r loadings}
+# Ambil PC yang eigenvalue >= 1
+n_pc_selected <- sum(eigenvalues[, 1] >= 1)
+cat(sprintf("➡️  PC yang dipilih (Eigenvalue ≥ 1): %d PC\n\n", n_pc_selected))
+
+loadings_mat <- pca_result$var$coord[, 1:n_pc_selected]
+colnames(loadings_mat) <- paste0("PC", 1:n_pc_selected)
+rownames(loadings_mat) <- FEATURE_COLS
+
+# Tabel loading
+loadings_df <- as.data.frame(round(loadings_mat, 3))
+loadings_df$Variabel <- rownames(loadings_df)
+loadings_df <- loadings_df %>% select(Variabel, everything())
+
+kable(loadings_df,
+      caption = "Loading Matrix – Kontribusi Variabel ke Tiap Principal Component") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE) %>%
+  column_spec(1, bold = TRUE, color = "#1a5276")
+```
+
+```{r loading-heatmap, fig.height=6, fig.cap="Heatmap Loading: Kekuatan Kontribusi Variabel ke Tiap PC"}
+loadings_long <- loadings_df %>%
+  pivot_longer(-Variabel, names_to = "PC", values_to = "Loading")
+
+ggplot(loadings_long, aes(x = PC, y = Variabel, fill = Loading)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = round(Loading, 2),
+                color = abs(Loading) > 0.5), size = 3.2) +
+  scale_fill_gradient2(low = "#c0392b", mid = "white", high = "#1a5276",
+                       midpoint = 0, limits = c(-1, 1)) +
+  scale_color_manual(values = c("FALSE" = "gray50", "TRUE" = "black"), guide = "none") +
+  labs(title    = "Heatmap Loading Matrix",
+       subtitle = "Nilai besar (merah/biru gelap) = kontribusi kuat ke PC tersebut",
+       x = NULL, y = NULL, fill = "Loading") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        axis.text     = element_text(size = 9))
+```
+
+::: result.box
+**Interpretasi Loading Matrix dan Heatmap Loading :** Loading matrix digunakan untuk melihat kontribusi masing-masing variabel terhadap komponen utama yang terpilih, yaitu PC1, PC2, dan PC3. Nilai loading yang semakin besar menunjukkan bahwa variabel tersebut semakin kuat dalam membentuk komponen utama tertentu.
+
+Berdasarkan hasil loading, PC1 didominasi oleh Cognitive_Load_Score, Digital_Distraction_Index, Notification_Freq, Impulsive_Check, Multitasking_Score, Focus_Difficulty, dan Screen_Time. Hal ini menunjukkan bahwa PC1 merepresentasikan gangguan digital aktif dan beban kognitif, karena variabel-variabel tersebut berkaitan dengan notifikasi, kebiasaan mengecek HP, multitasking, kesulitan fokus, serta tingkat distraksi digital.
+
+Selanjutnya, PC2 memiliki kontribusi kuat dari Productivity_Ratio, Study_Hours, Focus_Difficulty, dan Deep_Work_Dur, sehingga dapat diartikan sebagai kapasitas produktif mahasiswa. Sementara itu, PC3 banyak dipengaruhi oleh Deep_Work_Dur dan Sleep_Duration, sehingga PC3 berkaitan dengan ketahanan fokus dan kondisi pemulihan fisik, terutama dari aspek durasi deep work dan tidur.
+
+Heatmap loading memperjelas pola kontribusi tersebut melalui warna. Warna biru gelap menunjukkan loading positif yang kuat, sedangkan warna merah menunjukkan loading negatif. Dari visualisasi ini terlihat bahwa setiap PC memiliki karakteristik yang berbeda: PC1 lebih kuat pada aspek gangguan digital, PC2 pada produktivitas, dan PC3 pada durasi fokus serta tidur. Dengan demikian, hasil loading matrix dan heatmap membantu memberi makna konseptual pada komponen PCA sebelum digunakan pada analisis berikutnya.
+:::
+
+## Penamaan & Interpretasi PC
+
+```{r pc-interpretation}
+pc_labels <- data.frame(
+  PC          = paste0("PC", 1:n_pc_selected),
+  Nama_Konsep = c(
+    "Gangguan Digital Aktif",
+    "Kapasitas & Durasi Produktif",
+    "Distraksi Pasif & Multitasking",
+    "Kesehatan Tidur"
+  )[1:n_pc_selected],
+  Variabel_Dominan = c(
+    "Notification_Freq, Impulsive_Check, Focus_Difficulty, DDI",
+    "Deep_Work_Dur, Study_Hours, Productivity_Ratio",
+    "Multitasking_Score, Screen_Time",
+    "Sleep_Duration"
+  )[1:n_pc_selected],
+  Variansi = paste0(round(eigenvalues[1:n_pc_selected, 2], 1), "%")
+)
+
+pc_labels %>%
+  kable(caption = "Interpretasi Konseptual Tiap Principal Component",
+        col.names = c("PC","Nama Konsep","Variabel Dominan","Variansi Terjelaskan")) %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE) %>%
+  column_spec(2, bold = TRUE, color = "#1a5276") %>%
+  column_spec(4, bold = TRUE, color = "#27ae60")
+```
+
+::: result-box
+**Interpretasi Penamaan & Interpretasi PC :** Berdasarkan hasil loading dan variansi yang dijelaskan, tiga komponen utama diberi nama sesuai dengan variabel yang paling dominan membentuk masing-masing PC. PC1 dinamai Gangguan Digital Aktif karena didominasi oleh variabel Notification_Freq, Impulsive_Check, Focus_Difficulty, dan Digital_Distraction_Index, dengan variansi terjelaskan sebesar 40,7%. Komponen ini menggambarkan tingkat gangguan digital aktif yang dialami mahasiswa saat belajar.
+
+PC2 dinamai Kapasitas & Durasi Produktif karena didominasi oleh Deep_Work_Dur, Study_Hours, dan Productivity_Ratio, dengan variansi sebesar 18%. Komponen ini menunjukkan kemampuan mahasiswa dalam mempertahankan fokus, belajar mandiri, dan menjaga produktivitas. Sementara itu, PC3 dinamai Distraksi Pasif & Multitasking karena didominasi oleh Multitasking_Score dan Screen_Time, dengan variansi sebesar 11,6%. Komponen ini merepresentasikan distraksi yang muncul dari kebiasaan multitasking dan durasi penggunaan layar.
+:::
+
+## Biplot PCA
+
+```{r biplot, fig.height=7, fig.cap="Biplot PCA: Individu (titik) & Variabel (panah) dalam Ruang PC1 vs PC2"}
+fviz_pca_biplot(pca_result,
+                repel         = TRUE,
+                col.var       = "#e74c3c",
+                col.ind       = df$IPK,
+                gradient.cols = c("#3498db", "#f39c12", "#e74c3c"),
+                alpha.ind     = 0.7,
+                label         = "var",
+                title         = "Biplot PCA – Responden diwarnai berdasarkan IPK") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+::: result-box
+**Cara membaca Biplot:**\
+- **Titik** = setiap responden (mahasiswa). Warna mencerminkan nilai IPK.\
+- **Panah** = variabel. Panah yang searah = variabel berkorelasi positif. Panah berlawanan arah = berkorelasi negatif.\
+- Responden yang berada searah dengan panah `Deep_Work_Dur` cenderung punya nilai tinggi pada variabel tersebut.
+:::
+
+::: result-box
+**Interpretasi Biplot PCA :** Pada biplot, variabel seperti Notification_Freq, Impulsive_Check, Focus_Difficulty, Digital_Distraction_Index, dan Cognitive_Load_Score mengarah ke sisi kanan, sehingga mendukung interpretasi bahwa PC1 berkaitan dengan gangguan digital aktif. Sebaliknya, variabel seperti Productivity_Ratio, Study_Hours, dan Deep_Work_Dur cenderung mengarah ke sisi berbeda, yang menunjukkan pola produktivitas dan fokus yang berlawanan dengan gangguan digital.
+
+Dengan demikian, biplot memperjelas bahwa responden memiliki pola yang beragam. Sebagian mahasiswa lebih dekat dengan karakteristik distraksi digital, sedangkan sebagian lainnya lebih dekat dengan pola fokus dan produktivitas. Visualisasi ini membantu memahami posisi mahasiswa berdasarkan kombinasi antara gangguan digital dan kapasitas produktif.
+:::
+
+## Skor PC untuk Pemodelan
+
+```{r pc-scores}
+# Ambil skor PC yang terpilih sebagai fitur baru
+pc_scores <- as.data.frame(pca_result$ind$coord[, 1:n_pc_selected])
+colnames(pc_scores) <- paste0("PC", 1:n_pc_selected)
+
+# Tambahkan target
+pc_scores$IPK <- df$IPK
+
+cat("✅ Skor PC siap digunakan sebagai fitur pemodelan!\n\n")
+cat("Preview skor PC (6 baris pertama):\n")
+head(pc_scores, 6) %>%
+  kable(digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped"), full_width = FALSE)
+```
+
+::: result-box
+**Interpretasi Skor PC untuk pemodelan :** Skor PC ini merupakan hasil transformasi dari 11 variabel awal yang sebelumnya telah diringkas melalui PCA. Setiap responden kini memiliki nilai pada PC1, PC2, dan PC3, yang masing-masing merepresentasikan pola utama seperti gangguan digital aktif, kapasitas produktif, serta distraksi pasif dan multitasking. Nilai IPK kemudian ditambahkan sebagai variabel target yang akan diprediksi.
+
+Dengan demikian, data hasil PCA sudah siap digunakan dalam proses pemodelan shrinkage regression. Penggunaan skor PC bertujuan untuk membuat model lebih ringkas karena informasi dari banyak variabel awal telah dirangkum ke dalam beberapa komponen utama.
+:::
+
+------------------------------------------------------------------------
+
+# Tahap 3: Pemodelan Shrinkage (Regularized Regression)
+
+::: section-box
+**Mengapa perlu Regularization?**\
+Regresi biasa (OLS) bisa *overfitting* — model terlalu "hafal" data latih sehingga buruk di data baru. **Ridge** dan **Lasso** menambahkan "penalti" ke model agar koefisien tidak terlalu besar.
+
+-   🟦 **Ridge (L2):** Mengecilkan semua koefisien, tapi tidak sampai nol. Cocok jika semua variabel relevan.\
+-   🟨 **Lasso (L1):** Bisa membuat koefisien tepat nol = **seleksi variabel otomatis**. Cocok jika hanya beberapa variabel benar-benar penting.\
+-   🟩 **ElasticNet:** Kombinasi Ridge + Lasso. Fleksibel.
+:::
+
+## Persiapan Data Pemodelan
+
+```{r prep-model}
+# ── Pendekatan 1: Menggunakan skor PC sebagai fitur
+X_pca  <- as.matrix(pc_scores[, paste0("PC", 1:n_pc_selected)])
+y      <- pc_scores$IPK
+
+# ── Pendekatan 2: Menggunakan fitur original yang sudah di-scale
+X_orig <- as.matrix(df[, SCALED_COLS])
+colnames(X_orig) <- FEATURE_COLS
+
+# Train-test split (80:20, stratified manual)
+set.seed(42)
+train_idx  <- createDataPartition(y, p = 0.8, list = FALSE)
+test_idx   <- setdiff(1:length(y), train_idx)
+
+# PCA-based split
+X_train_pca <- X_pca[train_idx, ];  X_test_pca <- X_pca[test_idx, ]
+y_train      <- y[train_idx];        y_test      <- y[test_idx]
+
+# Original-feature split
+X_train_orig <- X_orig[train_idx, ]; X_test_orig <- X_orig[test_idx, ]
+
+cat(sprintf("✅ Data dibagi: %d training | %d testing\n", length(y_train), length(y_test)))
+cat(sprintf("   IPK train - Mean: %.3f | SD: %.3f\n", mean(y_train), sd(y_train)))
+cat(sprintf("   IPK test  - Mean: %.3f | SD: %.3f\n", mean(y_test),  sd(y_test)))
+```
+
+::: result-box
+**Interpretasi Persiapan Pemodelan Shrinkage :** Data pemodelan disiapkan melalui dua pendekatan, yaitu menggunakan skor PCA sebagai fitur dan menggunakan fitur original yang sudah di-scale. Selanjutnya, data dibagi menjadi 97 data training dan 24 data testing dengan proporsi sekitar 80:20. Rata-rata IPK pada data training adalah 3,265 dengan standar deviasi 0,490, sedangkan rata-rata IPK pada data testing adalah 3,256 dengan standar deviasi 0,515. Nilai rata-rata yang hampir sama menunjukkan bahwa pembagian data cukup seimbang, sehingga data testing dapat digunakan untuk mengevaluasi performa model secara lebih objektif.
+:::
+
+## Ridge Regression
+
+### Pada Skor PCA
+
+```{r ridge-pca}
+# Cross-validation untuk mencari lambda optimal
+cv_ridge_pca <- cv.glmnet(X_train_pca, y_train,
+                           alpha  = 0,      # alpha=0 → Ridge
+                           nfolds = 10,
+                           type.measure = "mse")
+
+lambda_ridge_pca <- cv_ridge_pca$lambda.min
+
+# Prediksi pada test set
+pred_ridge_pca <- predict(cv_ridge_pca, s = lambda_ridge_pca, newx = X_test_pca)
+
+rmse_ridge_pca <- rmse(y_test, pred_ridge_pca)
+mae_ridge_pca  <- mae(y_test, pred_ridge_pca)
+r2_ridge_pca   <- 1 - sum((y_test - pred_ridge_pca)^2) / sum((y_test - mean(y_test))^2)
+
+cat("=== Ridge Regression (Fitur: Skor PCA) ===\n")
+cat(sprintf("  Lambda optimal (CV) : %.6f\n", lambda_ridge_pca))
+cat(sprintf("  RMSE  : %.4f\n", rmse_ridge_pca))
+cat(sprintf("  MAE   : %.4f\n", mae_ridge_pca))
+cat(sprintf("  R²    : %.4f (%.1f%% variansi terjelaskan)\n", r2_ridge_pca, r2_ridge_pca*100))
+```
+
+### Pada Fitur Original
+
+```{r ridge-orig}
+cv_ridge_orig <- cv.glmnet(X_train_orig, y_train,
+                            alpha  = 0,
+                            nfolds = 10,
+                            type.measure = "mse")
+
+lambda_ridge_orig <- cv_ridge_orig$lambda.min
+pred_ridge_orig   <- predict(cv_ridge_orig, s = lambda_ridge_orig, newx = X_test_orig)
+
+rmse_ridge_orig <- rmse(y_test, pred_ridge_orig)
+mae_ridge_orig  <- mae(y_test, pred_ridge_orig)
+r2_ridge_orig   <- 1 - sum((y_test - pred_ridge_orig)^2) / sum((y_test - mean(y_test))^2)
+
+cat("=== Ridge Regression (Fitur: Original Scaled) ===\n")
+cat(sprintf("  Lambda optimal (CV) : %.6f\n", lambda_ridge_orig))
+cat(sprintf("  RMSE  : %.4f\n", rmse_ridge_orig))
+cat(sprintf("  MAE   : %.4f\n", mae_ridge_orig))
+cat(sprintf("  R²    : %.4f (%.1f%% variansi terjelaskan)\n", r2_ridge_orig, r2_ridge_orig*100))
+```
+
+### Plot Lambda CV – Ridge
+
+```{r ridge-cv-plot, fig.cap="CV Error vs Log(Lambda) – Ridge Regression (Fitur Original)"}
+plot(cv_ridge_orig,
+     main = "Ridge: CV Error vs Log(Lambda)\n(Fitur Original yang di-scale)")
+abline(v = log(cv_ridge_orig$lambda.min), col = "red", lty = 2, lwd = 2)
+abline(v = log(cv_ridge_orig$lambda.1se), col = "blue", lty = 2, lwd = 1.5)
+legend("topright",
+       legend = c("Lambda min (optimal)", "Lambda 1SE"),
+       col    = c("red", "blue"), lty = 2, bty = "n")
+```
+
+::: result-box
+**Interpretasi Ridge Regression :** Pada tahap ini, Ridge Regression digunakan untuk memprediksi IPK dengan dua pendekatan, yaitu menggunakan skor PCA dan menggunakan fitur original yang sudah di-scale. Ridge bekerja dengan memberikan penalti L2 untuk mengecilkan koefisien variabel, tetapi tidak menghapus variabel dari model.
+
+Hasil Ridge pada skor PCA menghasilkan nilai RMSE = 0,5046, MAE = 0,3954, dan R² = -0,0003. Hasil yang sama juga diperoleh pada Ridge dengan fitur original scaled, yaitu RMSE = 0,5046, MAE = 0,3954, dan R² = -0,0003. Nilai R² yang mendekati nol bahkan sedikit negatif menunjukkan bahwa model Ridge belum mampu menjelaskan variasi IPK dengan baik pada data testing.
+
+Plot cross-validation lambda menunjukkan proses pemilihan nilai lambda optimal berdasarkan nilai error terkecil. Namun, meskipun lambda optimal telah dipilih, performa Ridge tetap rendah. Hal ini mengindikasikan bahwa pola hubungan antara variabel prediktor dan IPK belum cukup kuat untuk ditangkap oleh model Ridge. Dengan demikian, Ridge digunakan sebagai model pembanding, tetapi bukan model terbaik dalam analisis ini.
+:::
+
+## Lasso Regression
+
+### Pada Skor PCA
+
+```{r lasso-pca}
+cv_lasso_pca <- cv.glmnet(X_train_pca, y_train,
+                           alpha  = 1,      # alpha=1 → Lasso
+                           nfolds = 10,
+                           type.measure = "mse")
+
+lambda_lasso_pca <- cv_lasso_pca$lambda.min
+pred_lasso_pca   <- predict(cv_lasso_pca, s = lambda_lasso_pca, newx = X_test_pca)
+
+rmse_lasso_pca <- rmse(y_test, pred_lasso_pca)
+mae_lasso_pca  <- mae(y_test, pred_lasso_pca)
+r2_lasso_pca   <- 1 - sum((y_test - pred_lasso_pca)^2) / sum((y_test - mean(y_test))^2)
+
+cat("=== Lasso Regression (Fitur: Skor PCA) ===\n")
+cat(sprintf("  Lambda optimal (CV) : %.6f\n", lambda_lasso_pca))
+cat(sprintf("  RMSE  : %.4f\n", rmse_lasso_pca))
+cat(sprintf("  MAE   : %.4f\n", mae_lasso_pca))
+cat(sprintf("  R²    : %.4f\n", r2_lasso_pca))
+
+# Koefisien Lasso
+lasso_coef_pca <- coef(cv_lasso_pca, s = lambda_lasso_pca)
+cat("\n  Koefisien Lasso (Skor PCA):\n")
+print(lasso_coef_pca)
+```
+
+### Pada Fitur Original
+
+```{r lasso-orig}
+cv_lasso_orig <- cv.glmnet(X_train_orig, y_train,
+                            alpha  = 1,
+                            nfolds = 10,
+                            type.measure = "mse")
+
+lambda_lasso_orig <- cv_lasso_orig$lambda.min
+pred_lasso_orig   <- predict(cv_lasso_orig, s = lambda_lasso_orig, newx = X_test_orig)
+
+rmse_lasso_orig <- rmse(y_test, pred_lasso_orig)
+mae_lasso_orig  <- mae(y_test, pred_lasso_orig)
+r2_lasso_orig   <- 1 - sum((y_test - pred_lasso_orig)^2) / sum((y_test - mean(y_test))^2)
+
+cat("=== Lasso Regression (Fitur: Original Scaled) ===\n")
+cat(sprintf("  Lambda optimal (CV) : %.6f\n", lambda_lasso_orig))
+cat(sprintf("  RMSE  : %.4f\n", rmse_lasso_orig))
+cat(sprintf("  MAE   : %.4f\n", mae_lasso_orig))
+cat(sprintf("  R²    : %.4f\n", r2_lasso_orig))
+
+cat("\n  Koefisien Lasso (Fitur Original – variabel terpilih = ≠ 0):\n")
+lasso_coef_orig <- as.matrix(coef(cv_lasso_orig, s = lambda_lasso_orig))
+lasso_nonzero   <- lasso_coef_orig[lasso_coef_orig != 0, , drop = FALSE]
+print(round(lasso_nonzero, 4))
+```
+
+::: result-box
+**Interpretasi Lasso Regression :** Lasso Regression digunakan untuk memprediksi IPK sekaligus melakukan seleksi variabel. Lasso bekerja dengan memberikan penalti L1 yang dapat mengecilkan koefisien hingga tepat nol, sehingga variabel yang kurang berkontribusi dapat dieliminasi dari model.
+
+Pada pendekatan menggunakan skor PCA, model Lasso menghasilkan RMSE = 0,5046, MAE = 0,3954, dan R² = -0,0003. Selain itu, seluruh koefisien PC1, PC2, dan PC3 bernilai nol, sehingga model hanya menyisakan intercept. Hal ini menunjukkan bahwa skor PCA belum mampu memberikan kontribusi prediktif yang kuat terhadap IPK.
+
+Sementara itu, pada pendekatan menggunakan fitur original yang sudah di-scale, model Lasso menghasilkan performa yang lebih baik, yaitu RMSE = 0,4864, MAE = 0,3766, dan R² = 0,0706. Variabel yang terpilih oleh Lasso adalah Impulsive_Check dengan koefisien -0,0461. Artinya, kebiasaan mengecek HP secara refleks memiliki hubungan negatif terhadap IPK, meskipun pengaruhnya relatif kecil.
+:::
+
+## ElasticNet Regression
+
+```{r elasticnet}
+# Cari alpha optimal via grid search
+alpha_grid <- seq(0.1, 0.9, by = 0.1)
+
+best_alpha  <- 0.5
+best_rmse   <- Inf
+
+for (a in alpha_grid) {
+  cv_en <- cv.glmnet(X_train_orig, y_train,
+                     alpha = a, nfolds = 10, type.measure = "mse")
+  pred_en <- predict(cv_en, s = cv_en$lambda.min, newx = X_test_orig)
+  r_en    <- rmse(y_test, pred_en)
+  if (r_en < best_rmse) {
+    best_rmse  <- r_en
+    best_alpha <- a
+  }
+}
+
+cv_en_best <- cv.glmnet(X_train_orig, y_train,
+                         alpha = best_alpha, nfolds = 10, type.measure = "mse")
+pred_en_best <- predict(cv_en_best, s = cv_en_best$lambda.min, newx = X_test_orig)
+
+rmse_en <- rmse(y_test, pred_en_best)
+mae_en  <- mae(y_test, pred_en_best)
+r2_en   <- 1 - sum((y_test - pred_en_best)^2) / sum((y_test - mean(y_test))^2)
+
+cat("=== ElasticNet Regression (Fitur: Original Scaled) ===\n")
+cat(sprintf("  Alpha terbaik       : %.1f\n", best_alpha))
+cat(sprintf("  Lambda optimal (CV) : %.6f\n", cv_en_best$lambda.min))
+cat(sprintf("  RMSE  : %.4f\n", rmse_en))
+cat(sprintf("  MAE   : %.4f\n", mae_en))
+cat(sprintf("  R²    : %.4f\n", r2_en))
+```
+
+::: result-box
+**Interpretasi ElasticNet Regression :** ElasticNet Regression digunakan sebagai model pembanding karena menggabungkan penalti Ridge dan Lasso. Model ini lebih fleksibel karena dapat mengecilkan koefisien sekaligus melakukan seleksi variabel secara lebih seimbang.
+
+Berdasarkan hasil grid search, nilai alpha terbaik adalah 0,4 dengan lambda optimal 0,156149. Model ElasticNet menghasilkan RMSE = 0,4891, MAE = 0,3787, dan R² = 0,0602. Nilai ini menunjukkan bahwa ElasticNet memiliki performa yang cukup dekat dengan Lasso fitur original, tetapi masih sedikit lebih rendah berdasarkan RMSE dan R².
+
+Dengan demikian, ElasticNet dapat dijadikan model pembanding yang cukup baik, tetapi bukan model terbaik dalam analisis ini.
+:::
+
+## Perbandingan Semua Model
+
+```{r model-comparison}
+model_comparison <- data.frame(
+  Model = c(
+    "Ridge (Skor PCA)",
+    "Ridge (Fitur Original)",
+    "Lasso (Skor PCA)",
+    "Lasso (Fitur Original)",
+    "ElasticNet (Fitur Original)"
+  ),
+  RMSE = round(c(rmse_ridge_pca, rmse_ridge_orig,
+                 rmse_lasso_pca, rmse_lasso_orig, rmse_en), 4),
+  MAE  = round(c(mae_ridge_pca, mae_ridge_orig,
+                 mae_lasso_pca, mae_lasso_orig, mae_en), 4),
+  R2   = round(c(r2_ridge_pca, r2_ridge_orig,
+                 r2_lasso_pca, r2_lasso_orig, r2_en), 4)
+) %>%
+  mutate(
+    R2_pct   = paste0(round(R2 * 100, 1), "%"),
+    Peringkat = rank(RMSE)
+  ) %>%
+  arrange(RMSE)
+
+kable(model_comparison,
+      caption = "Perbandingan Performa Model – Test Set",
+      col.names = c("Model", "RMSE ↓", "MAE ↓", "R²", "R² (%)", "Peringkat")) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = TRUE) %>%
+  row_spec(1, bold = TRUE, background = "#d5f5e3", color = "#1a5276") %>%
+  column_spec(2:3, bold = TRUE)
+```
+
+```{r model-bar-plot, fig.cap="Perbandingan RMSE dan R² Semua Model"}
+p1 <- ggplot(model_comparison, aes(x = reorder(Model, RMSE), y = RMSE, fill = RMSE)) +
+  geom_col(width = 0.65, alpha = 0.9) +
+  geom_text(aes(label = RMSE), hjust = -0.1, size = 3.5, fontface = "bold") +
+  scale_fill_gradient(low = "#27ae60", high = "#e74c3c") +
+  coord_flip() +
+  labs(title = "RMSE (lebih kecil = lebih baik)", x = NULL, y = "RMSE") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        plot.title      = element_text(face = "bold")) +
+  expand_limits(y = max(model_comparison$RMSE) * 1.15)
+
+p2 <- ggplot(model_comparison, aes(x = reorder(Model, R2), y = R2, fill = R2)) +
+  geom_col(width = 0.65, alpha = 0.9) +
+  geom_text(aes(label = paste0(round(R2*100,1),"%")), hjust = -0.1,
+            size = 3.5, fontface = "bold") +
+  scale_fill_gradient(low = "#e74c3c", high = "#27ae60") +
+  coord_flip() +
+  labs(title = "R² (lebih besar = lebih baik)", x = NULL, y = "R²") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        plot.title      = element_text(face = "bold")) +
+  expand_limits(y = 1.0)
+
+library(gridExtra)
+grid.arrange(p1, p2, nrow = 1,
+             top = grid::textGrob("Perbandingan Performa Model Regularized Regression",
+                                  gp = grid::gpar(fontface = "bold", fontsize = 13)))
+```
+
+::: result-box
+**Interpretasi Perbandingan Semua Model :** Perbandingan model dilakukan untuk melihat metode mana yang memiliki performa terbaik dalam memprediksi IPK pada data testing. Berdasarkan tabel dan grafik perbandingan, model terbaik adalah Lasso dengan fitur original, karena memiliki nilai RMSE paling rendah sebesar 0,4864 dan nilai R² tertinggi sebesar 0,0706 atau 7,1%.
+
+Model terbaik kedua adalah ElasticNet dengan fitur original, dengan RMSE = 0,4891 dan R² = 0,0602. Sementara itu, Ridge dan Lasso yang menggunakan skor PCA memiliki performa lebih rendah, dengan R² mendekati nol. Hal ini menunjukkan bahwa dalam dataset ini, fitur original yang sudah di-scale lebih informatif untuk prediksi IPK dibandingkan skor PCA.
+
+Namun, nilai R² model terbaik masih tergolong rendah, yaitu hanya 7,1%. Artinya, model hanya mampu menjelaskan sebagian kecil variasi IPK. Oleh karena itu, hasil pemodelan ini lebih tepat dipahami sebagai analisis eksploratif, bukan sebagai model prediksi IPK yang kuat.
+:::
+
+## Visualisasi: Prediksi vs Aktual (Model Terbaik)
+
+```{r pred-vs-actual, fig.cap="Prediksi vs Nilai Aktual IPK – Model Terbaik"}
+# Tentukan model terbaik berdasarkan RMSE terendah
+best_model_name <- model_comparison$Model[1]
+cat(sprintf("🏆 Model terbaik: %s\n", best_model_name))
+
+# Ambil prediksi model terbaik
+if (grepl("ElasticNet", best_model_name)) {
+  best_pred <- as.numeric(pred_en_best)
+} else if (grepl("Lasso.*Original", best_model_name)) {
+  best_pred <- as.numeric(pred_lasso_orig)
+} else if (grepl("Ridge.*Original", best_model_name)) {
+  best_pred <- as.numeric(pred_ridge_orig)
+} else if (grepl("Lasso.*PCA", best_model_name)) {
+  best_pred <- as.numeric(pred_lasso_pca)
+} else {
+  best_pred <- as.numeric(pred_ridge_pca)
+}
+
+df_pred <- data.frame(
+  Aktual    = y_test,
+  Prediksi  = best_pred,
+  Residual  = y_test - best_pred
+)
+
+ggplot(df_pred, aes(x = Aktual, y = Prediksi)) +
+  geom_point(aes(color = abs(Residual)), size = 3.5, alpha = 0.8) +
+  geom_abline(intercept = 0, slope = 1, color = "#e74c3c",
+              linewidth = 1.2, linetype = "dashed") +
+  geom_smooth(method = "lm", se = TRUE, color = "#1a5276",
+              fill = "#aed6f1", alpha = 0.3) +
+  scale_color_gradient(low = "#27ae60", high = "#e74c3c", name = "|Residual|") +
+  annotate("text", x = min(y_test) + 0.05, y = max(best_pred) - 0.05,
+           label = sprintf("R² = %.3f\nRMSE = %.4f", model_comparison$R2[1], model_comparison$RMSE[1]),
+           size = 4, hjust = 0, color = "#1a5276", fontface = "bold") +
+  labs(title    = sprintf("Prediksi vs Aktual IPK\n(%s)", best_model_name),
+       subtitle = "Garis merah = prediksi sempurna | Titik hijau = error kecil",
+       x        = "IPK Aktual",
+       y        = "IPK Prediksi") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"))
+```
+
+::: result-box
+**Interpretasi Prediksi vs Aktual Model Terbaik :** Visualisasi ini menunjukkan perbandingan antara nilai IPK aktual dan IPK hasil prediksi dari model terbaik, yaitu Lasso dengan fitur original. Garis merah putus-putus menunjukkan kondisi prediksi sempurna, sedangkan titik-titik merepresentasikan hasil prediksi pada data testing.
+
+Berdasarkan grafik, nilai prediksi model cenderung berkumpul pada rentang yang sempit, yaitu sekitar 3,20 sampai 3,35, meskipun IPK aktual responden lebih bervariasi. Hal ini menunjukkan bahwa model belum mampu menangkap variasi IPK secara kuat, terutama untuk responden dengan IPK yang sangat rendah atau sangat tinggi.
+
+Nilai R² = 0,071 menunjukkan bahwa model hanya mampu menjelaskan sekitar 7,1% variasi IPK, sedangkan RMSE = 0,4864 menunjukkan rata-rata kesalahan prediksi masih sekitar 0,49 poin IPK. Dengan demikian, meskipun Lasso fitur original menjadi model terbaik dibandingkan model lain, kemampuan prediksinya masih tergolong rendah dan lebih tepat digunakan sebagai analisis eksploratif.
+:::
+
+## Visualisasi Koefisien Lasso (Seleksi Variabel)
+
+```{r lasso-coef-plot, fig.cap="Koefisien Lasso – Variabel yang Dipilih (Koef ≠ 0)"}
+coef_df <- data.frame(
+  Variabel = rownames(lasso_coef_orig)[-1],
+  Koefisien = as.numeric(lasso_coef_orig[-1])
+) %>%
+  filter(Koefisien != 0) %>%
+  mutate(Arah = ifelse(Koefisien > 0, "Positif (+IPK)", "Negatif (-IPK)"))
+
+ggplot(coef_df, aes(x = reorder(Variabel, Koefisien), y = Koefisien, fill = Arah)) +
+  geom_col(width = 0.65, alpha = 0.9) +
+  geom_text(aes(label = round(Koefisien, 3),
+                hjust = ifelse(Koefisien > 0, -0.1, 1.1)),
+            size = 3.5, fontface = "bold") +
+  coord_flip() +
+  scale_fill_manual(values = c("Positif (+IPK)" = "#1a5276",
+                               "Negatif (-IPK)" = "#e74c3c")) +
+  labs(title    = "Koefisien Lasso – Variabel yang Lolos Seleksi",
+       subtitle = "Variabel dengan koefisien = 0 dihilangkan otomatis oleh Lasso",
+       x        = NULL, y        = "Koefisien (Standardized)",
+       fill     = "Arah Pengaruh") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        legend.position = "top") +
+  expand_limits(y = c(min(coef_df$Koefisien) * 1.3, max(coef_df$Koefisien) * 1.3))
+```
+
+::: result-box
+**Interpretasi Visualisasi Koefisien Lasso :** Visualisasi koefisien Lasso menunjukkan variabel yang berhasil lolos seleksi model setelah proses regularisasi. Berdasarkan grafik, hanya variabel Impulsive_Check yang memiliki koefisien tidak nol, yaitu sebesar -0,046. Hal ini berarti variabel lain dieliminasi oleh Lasso karena kontribusinya dianggap kurang kuat dalam model.
+
+Koefisien negatif pada Impulsive_Check menunjukkan bahwa semakin tinggi kecenderungan mahasiswa untuk mengecek HP secara refleks, maka IPK cenderung menurun. Namun, karena nilai koefisiennya kecil dan performa model masih rendah, pengaruh ini sebaiknya ditafsirkan sebagai indikasi hubungan negatif, bukan sebagai pengaruh yang kuat atau pasti.
+:::
+
+## Regularization Path – Lasso
+
+```{r lasso-path, fig.cap="Regularization Path Lasso: Koefisien mengecil seiring lambda membesar"}
+plot(cv_lasso_orig$glmnet.fit,
+     xvar  = "lambda",
+     label = TRUE,
+     main  = "Regularization Path – Lasso (Fitur Original)")
+abline(v = log(cv_lasso_orig$lambda.min), col = "red",  lty = 2, lwd = 2)
+abline(v = log(cv_lasso_orig$lambda.1se), col = "blue", lty = 2, lwd = 1.5)
+legend("topright",
+       legend = c("Lambda min", "Lambda 1SE"),
+       col    = c("red", "blue"), lty = 2, bty = "n")
+mtext("Setiap garis = satu variabel. Garis yang pertama hilang = yang pertama di-exclude Lasso.",
+      side = 1, line = 4, cex = 0.8, col = "gray40")
+```
+
+::: result-box
+**Interpretasi Regularization Path Lasso :** Regularization path menunjukkan perubahan nilai koefisien setiap variabel ketika nilai lambda berubah. Setiap garis pada grafik merepresentasikan satu variabel prediktor. Ketika lambda semakin besar, koefisien variabel akan semakin mengecil dan beberapa variabel dapat menjadi nol, sehingga variabel tersebut dieliminasi oleh Lasso.
+
+Berdasarkan grafik, terlihat bahwa sebagian besar variabel menyusut menuju nol ketika regularisasi diterapkan. Hal ini menunjukkan bahwa Lasso melakukan seleksi variabel dengan menahan hanya variabel yang memiliki kontribusi paling stabil. Pada hasil akhir, hanya Impulsive_Check yang tetap terpilih sebagai prediktor, sedangkan variabel lainnya dieliminasi.
+
+Dengan demikian, grafik ini memperkuat hasil seleksi variabel sebelumnya, yaitu bahwa kebiasaan mengecek HP secara refleks menjadi variabel yang paling konsisten berhubungan dengan IPK dalam model Lasso, meskipun pengaruhnya tetap kecil.
+:::
+
+------------------------------------------------------------------------
+
+# Tahap 4: Analisis & Visualisasi Insight
+
+::: section-box
+**Tujuan bagian ini:** Menerjemahkan hasil statistik ke dalam **temuan yang dapat dipahami** dan **bermanfaat bagi mahasiswa dan dosen** di Program Studi Sains Data ITERA.
+:::
+
+## Distribusi IPK & Segmentasi Mahasiswa
+
+```{r ipk-segment, fig.cap="Distribusi IPK dan Segmentasi Kelompok Mahasiswa"}
+df_viz <- df %>%
+  mutate(
+    Segmen_IPK = case_when(
+      IPK >= 3.5             ~ "🏆 Cum Laude (≥3.50)",
+      IPK >= 3.0 & IPK < 3.5 ~ "📘 Sangat Memuaskan (3.00–3.49)",
+      IPK >= 2.5 & IPK < 3.0 ~ "📗 Memuaskan (2.50–2.99)",
+      TRUE                   ~ "⚠️  Di Bawah 2.50"
+    ),
+    Segmen_IPK = factor(Segmen_IPK,
+                        levels = c("🏆 Cum Laude (≥3.50)",
+                                   "📘 Sangat Memuaskan (3.00–3.49)",
+                                   "📗 Memuaskan (2.50–2.99)",
+                                   "⚠️  Di Bawah 2.50"))
+  )
+
+seg_count <- df_viz %>%
+  count(Segmen_IPK) %>%
+  mutate(Pct = round(n/sum(n)*100, 1))
+
+p_seg <- ggplot(seg_count, aes(x = reorder(Segmen_IPK, n), y = n, fill = Segmen_IPK)) +
+  geom_col(alpha = 0.88, width = 0.65) +
+  geom_text(aes(label = paste0(n, " (", Pct, "%)")),
+            hjust = -0.1, size = 4, fontface = "bold") +
+  coord_flip() +
+  scale_fill_manual(values = c(
+    "🏆 Cum Laude (≥3.50)"             = "#1a5276",
+    "📘 Sangat Memuaskan (3.00–3.49)" = "#2e86c1",
+    "📗 Memuaskan (2.50–2.99)"        = "#f39c12",
+    "⚠️  Di Bawah 2.50"              = "#e74c3c"
+  )) +
+  labs(title    = "Segmentasi Mahasiswa Berdasarkan IPK",
+       subtitle = sprintf("Total: %d responden | Rata-rata IPK: %.3f", nrow(df), mean(df$IPK)),
+       x = NULL, y = "Jumlah Mahasiswa") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none",
+        plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50")) +
+  expand_limits(y = max(seg_count$n) * 1.25)
+
+print(p_seg)
+```
+
+::: result-box
+**Interpretasi Distribusi IPK & Segmentasi Mahasiswa :** Visualisasi ini menunjukkan pembagian responden berdasarkan kategori IPK. Dari total 121 mahasiswa, kelompok terbesar berada pada kategori Sangat Memuaskan (3,00–3,49) sebanyak 55 mahasiswa (45,5%). Selanjutnya, terdapat 41 mahasiswa (33,9%) pada kategori Cum Laude (≥3,50), 17 mahasiswa (14%) pada kategori Memuaskan (2,50–2,99), dan 8 mahasiswa (6,6%) berada pada kategori di bawah 2,50.
+
+Secara umum, mayoritas responden memiliki IPK di atas 3,00, sehingga performa akademik mahasiswa dalam dataset ini tergolong cukup baik. Rata-rata IPK sebesar 3,263 juga menunjukkan bahwa sebagian besar mahasiswa berada pada rentang prestasi akademik menengah hingga tinggi. Segmentasi ini penting sebagai dasar untuk melihat apakah terdapat perbedaan pola distraksi digital, fokus, dan produktivitas pada tiap kelompok IPK.
+:::
+
+## Hubungan Distraksi Digital vs IPK
+
+```{r distraksi-vs-ipk, fig.height=8, fig.cap="Pola Hubungan Variabel Distraksi Digital terhadap IPK"}
+df_viz2 <- df_viz %>%
+  select(IPK, Segmen_IPK, Notification_Freq, Impulsive_Check,
+         Multitasking_Score, Focus_Difficulty, Deep_Work_Dur,
+         Screen_Time, Sleep_Duration, Study_Hours)
+
+var_labels <- c(
+  "Notification_Freq"  = "Frekuensi Notifikasi",
+  "Impulsive_Check"    = "Cek HP Refleks",
+  "Multitasking_Score" = "Multitasking",
+  "Focus_Difficulty"   = "Sulit Fokus Kembali",
+  "Deep_Work_Dur"      = "Durasi Deep Work (mnt)",
+  "Screen_Time"        = "Screen Time (jam/hari)",
+  "Sleep_Duration"     = "Durasi Tidur (jam)",
+  "Study_Hours"        = "Jam Belajar (jam/hari)"
+)
+
+df_long <- df_viz2 %>%
+  pivot_longer(cols = names(var_labels), names_to = "Variabel", values_to = "Nilai") %>%
+  mutate(Variabel = recode(Variabel, !!!var_labels))
+
+ggplot(df_long, aes(x = Nilai, y = IPK, color = Segmen_IPK)) +
+  geom_point(alpha = 0.5, size = 1.8) +
+  geom_smooth(method = "lm", se = TRUE, color = "#2c3e50",
+              fill = "#aed6f1", alpha = 0.25, linewidth = 0.9) +
+  facet_wrap(~Variabel, scales = "free_x", ncol = 4) +
+  scale_color_manual(values = c(
+    "🏆 Cum Laude (≥3.50)"             = "#1a5276",
+    "📘 Sangat Memuaskan (3.00–3.49)" = "#2e86c1",
+    "📗 Memuaskan (2.50–2.99)"        = "#f39c12",
+    "⚠️  Di Bawah 2.50"              = "#e74c3c"
+  )) +
+  labs(title    = "Hubungan Setiap Variabel terhadap IPK",
+       subtitle = "Garis tren menunjukkan arah pengaruh (positif/negatif)",
+       x        = "Nilai Variabel", y = "IPK", color = "Segmen IPK") +
+  theme_minimal(base_size = 10) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        legend.position = "bottom",
+        strip.text    = element_text(face = "bold", size = 9))
+```
+
+::: result-box
+**Interpretasi Hubungan Distraksi Digital vs IPK :** Visualisasi ini menunjukkan hubungan masing-masing variabel terhadap IPK, seperti frekuensi notifikasi, cek HP refleks, multitasking, kesulitan fokus, durasi deep work, screen time, durasi tidur, dan jam belajar. Setiap panel menampilkan sebaran responden berdasarkan nilai variabel tertentu, sedangkan garis tren menunjukkan arah hubungan variabel tersebut dengan IPK.
+
+Berdasarkan grafik, variabel Cek HP Refleks, Multitasking, dan Sulit Fokus Kembali cenderung memiliki arah hubungan negatif terhadap IPK. Artinya, semakin tinggi kebiasaan mengecek HP secara refleks, multitasking, dan kesulitan kembali fokus, IPK mahasiswa cenderung lebih rendah. Sebaliknya, variabel seperti Durasi Tidur dan Screen Time tampak memiliki kecenderungan positif yang lemah, tetapi hubungannya tidak terlalu kuat.
+
+Secara umum, grafik ini menunjukkan bahwa tidak ada satu variabel pun yang memiliki hubungan sangat kuat terhadap IPK. Namun, pola negatif pada beberapa variabel distraksi digital mendukung temuan model Lasso sebelumnya, terutama bahwa kebiasaan mengecek HP secara refleks menjadi salah satu indikator distraksi yang paling berkaitan dengan penurunan IPK.
+:::
+
+## Profil Rata-rata per Segmen IPK
+
+```{r profile-radar, fig.height=7, fig.cap="Profil Rata-rata Variabel per Segmen IPK"}
+profile_df <- df_viz %>%
+  group_by(Segmen_IPK) %>%
+  summarise(
+    `Notifikasi`       = mean(Notification_Freq),
+    `Cek HP Refleks`   = mean(Impulsive_Check),
+    `Multitasking`     = mean(Multitasking_Score),
+    `Sulit Fokus`      = mean(Focus_Difficulty),
+    `Deep Work (x10m)` = mean(Deep_Work_Dur) / 10,
+    `Screen Time`      = mean(Screen_Time),
+    `Jam Tidur`        = mean(Sleep_Duration),
+    `Jam Belajar`      = mean(Study_Hours),
+    .groups = "drop"
+  )
+
+profile_long <- profile_df %>%
+  pivot_longer(-Segmen_IPK, names_to = "Variabel", values_to = "Nilai")
+
+ggplot(profile_long, aes(x = Variabel, y = Nilai, fill = Segmen_IPK)) +
+  geom_col(position = "dodge", alpha = 0.85, width = 0.75) +
+  geom_text(aes(label = round(Nilai, 1)),
+            position = position_dodge(width = 0.75),
+            vjust = -0.4, size = 2.8, fontface = "bold") +
+  scale_fill_manual(values = c(
+    "🏆 Cum Laude (≥3.50)"             = "#1a5276",
+    "📘 Sangat Memuaskan (3.00–3.49)" = "#2e86c1",
+    "📗 Memuaskan (2.50–2.99)"        = "#f39c12",
+    "⚠️  Di Bawah 2.50"              = "#e74c3c"
+  )) +
+  labs(title    = "Profil Rata-rata Variabel per Segmen IPK",
+       subtitle = "Perbandingan kebiasaan mahasiswa di setiap kelompok prestasi",
+       x = NULL, y = "Nilai Rata-rata", fill = "Segmen IPK") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        axis.text.x   = element_text(angle = 30, hjust = 1, size = 9),
+        legend.position = "top")
+```
+
+::: result-box
+**Interpretasi Profil Rata-rata per Segmen IPK :** Visualisasi ini menunjukkan perbandingan rata-rata variabel pada setiap segmen IPK, yaitu Cum Laude, Sangat Memuaskan, Memuaskan, dan Di Bawah 2,50. Grafik ini digunakan untuk melihat apakah terdapat perbedaan pola kebiasaan digital, fokus, tidur, dan belajar pada tiap kelompok prestasi akademik.
+
+Berdasarkan grafik, kelompok dengan IPK lebih rendah cenderung memiliki nilai Cek HP Refleks, Multitasking, dan Sulit Fokus yang lebih tinggi. Hal ini menunjukkan bahwa mahasiswa dengan performa akademik lebih rendah cenderung lebih sering mengalami distraksi digital dan kesulitan mempertahankan fokus.
+
+Di sisi lain, kelompok dengan IPK lebih tinggi cenderung memiliki Jam Tidur yang lebih baik dan pola belajar yang relatif lebih stabil. Namun, beberapa variabel seperti Deep Work dan Screen Time tidak menunjukkan pola yang sepenuhnya konsisten antarsegmen, sehingga hasil ini perlu dibaca sebagai gambaran deskriptif, bukan hubungan sebab-akibat.
+
+Secara umum, visualisasi ini mendukung indikasi bahwa distraksi digital dan kesulitan fokus memiliki keterkaitan dengan perbedaan performa akademik mahasiswa.
+:::
+
+## Skor PC1 vs PC2: Peta Kognitif Mahasiswa
+
+```{r pca-map, fig.cap="Peta Kognitif Mahasiswa: PC1 (Gangguan Aktif) vs PC2 (Kapasitas Produktif)"}
+pc_viz <- pc_scores
+pc_viz$Segmen_IPK <- df_viz$Segmen_IPK
+
+ggplot(pc_viz, aes(x = PC1, y = PC2, color = Segmen_IPK, size = IPK)) +
+  geom_point(alpha = 0.75) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60") +
+  # Anotasi 4 kuadran
+  annotate("text", x =  2.5, y =  2.2, label = "🎯 Fokus\nTapi Kurang\nProduktif?",
+           size = 3, color = "gray40", hjust = 0.5, fontface = "italic") +
+  annotate("text", x = -2.5, y =  2.2, label = "⚡ Produktif\nRendah\nGangguan",
+           size = 3, color = "gray40", hjust = 0.5, fontface = "italic") +
+  annotate("text", x =  2.5, y = -2.2, label = "😰 Terdistraksi\n& Kurang\nProduktif",
+           size = 3, color = "gray40", hjust = 0.5, fontface = "italic") +
+  annotate("text", x = -2.5, y = -2.2, label = "✅ Zona\nIdeal:\nMinim Distraksi",
+           size = 3, color = "#27ae60", hjust = 0.5, fontface = "bold") +
+  scale_color_manual(values = c(
+    "🏆 Cum Laude (≥3.50)"             = "#1a5276",
+    "📘 Sangat Memuaskan (3.00–3.49)" = "#2e86c1",
+    "📗 Memuaskan (2.50–2.99)"        = "#f39c12",
+    "⚠️  Di Bawah 2.50"              = "#e74c3c"
+  )) +
+  scale_size_continuous(range = c(2, 6)) +
+  labs(title    = "Peta Kognitif Mahasiswa Sains Data ITERA",
+       subtitle = "PC1: Gangguan Digital Aktif | PC2: Kapasitas Produktif\nTitik besar = IPK tinggi",
+       x        = "PC1 – Gangguan Digital Aktif (→ makin kanan, makin terganggu)",
+       y        = "PC2 – Kapasitas Produktif (→ makin atas, makin produktif)",
+       color    = "Segmen IPK",
+       size     = "IPK") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"),
+        legend.position = "right")
+```
+
+::: result-box
+**Interpretasi Skor PC1 vs PC2: Peta Kognitif Mahasiswa :** Visualisasi ini memetakan mahasiswa berdasarkan dua komponen utama, yaitu PC1 sebagai Gangguan Digital Aktif dan PC2 sebagai Kapasitas Produktif. Sumbu horizontal menunjukkan tingkat gangguan digital, di mana semakin ke kanan berarti mahasiswa cenderung memiliki gangguan digital yang lebih tinggi. Sumbu vertikal menunjukkan kapasitas produktif, di mana semakin ke atas berarti mahasiswa cenderung memiliki kapasitas produktif yang lebih tinggi.
+
+Berdasarkan sebaran titik, mahasiswa tersebar pada beberapa kuadran yang menunjukkan karakteristik berbeda. Area kiri bawah menggambarkan zona dengan gangguan digital rendah, sedangkan area kanan bawah menunjukkan mahasiswa yang cenderung lebih terdistraksi dan kurang produktif. Sementara itu, area kiri atas menggambarkan mahasiswa yang relatif produktif dengan gangguan digital lebih rendah, dan area kanan atas menunjukkan mahasiswa yang tetap memiliki kapasitas produktif meskipun gangguan digitalnya cukup tinggi.
+
+Ukuran titik menunjukkan nilai IPK, sehingga titik yang lebih besar merepresentasikan IPK yang lebih tinggi. Dari visualisasi ini terlihat bahwa mahasiswa dengan IPK tinggi tidak hanya terkumpul pada satu area tertentu, melainkan tersebar di beberapa kuadran. Hal ini menunjukkan bahwa hubungan antara gangguan digital, kapasitas produktif, dan IPK tidak bersifat sederhana. Dengan demikian, peta kognitif ini lebih tepat digunakan sebagai visualisasi eksploratif untuk melihat pola umum mahasiswa, bukan sebagai bukti hubungan sebab-akibat yang kuat.
+:::
+
+## Digital Distraction Index vs IPK
+
+```{r ddi-plot, fig.cap="Digital Distraction Index (DDI) terhadap IPK dengan Density Overlay"}
+ggplot(df, aes(x = Digital_Distraction_Index, y = IPK)) +
+  geom_point(aes(color = IPK), alpha = 0.65, size = 3) +
+  geom_smooth(method = "lm", color = "#e74c3c", se = TRUE,
+              fill = "#fadbd8", linewidth = 1.2) +
+  geom_smooth(method = "loess", color = "#1a5276", se = FALSE,
+              linewidth = 1, linetype = "dashed") +
+  scale_color_gradient2(low = "#e74c3c", mid = "#f39c12", high = "#1a5276",
+                        midpoint = median(df$IPK)) +
+  annotate("text", x = 4.5, y = 1.2,
+           label = sprintf("r = %.3f", cor(df$Digital_Distraction_Index, df$IPK)),
+           size = 4.5, fontface = "bold", color = "#e74c3c") +
+  labs(title    = "Digital Distraction Index (DDI) vs IPK",
+       subtitle = "DDI = rata-rata skor 4 variabel distraksi Likert 1-5\nGaris merah = linear | Garis biru = LOESS (non-linear)",
+       x        = "Digital Distraction Index (1 = rendah, 5 = tinggi)",
+       y        = "IPK",
+       color    = "IPK") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title    = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color = "gray50"))
+```
+
+::: result-box
+**Interpretasi Digital Distraction Index vs IPK :** Visualisasi ini menunjukkan hubungan antara Digital Distraction Index (DDI) dan IPK mahasiswa. DDI menggambarkan tingkat distraksi digital, dengan nilai yang semakin tinggi menunjukkan tingkat gangguan digital yang semakin besar.
+
+Berdasarkan grafik, garis tren menunjukkan arah hubungan yang negatif lemah antara DDI dan IPK. Nilai korelasi sebesar r = -0,184 menunjukkan bahwa semakin tinggi tingkat distraksi digital, IPK mahasiswa cenderung sedikit menurun. Namun, hubungan ini tergolong lemah karena titik-titik data masih tersebar cukup luas.
+
+Dengan demikian, DDI memiliki indikasi hubungan negatif terhadap IPK, tetapi pengaruhnya tidak kuat. Hasil ini mendukung bahwa distraksi digital dapat berkaitan dengan performa akademik, namun bukan satu-satunya faktor utama yang menentukan IPK mahasiswa.
+:::
+
+------------------------------------------------------------------------
+
+# Tahap 5: Ringkasan Temuan (Summary of Insights)
+
+```{r summary-stats, echo=FALSE}
+# Hitung statistik untuk narasi
+r_ddi_ipk  <- round(cor(df$Digital_Distraction_Index, df$IPK), 3)
+r_dw_ipk   <- round(cor(df$Deep_Work_Dur, df$IPK), 3)
+r_st_ipk   <- round(cor(df$Screen_Time, df$IPK), 3)
+r_sleep    <- round(cor(df$Sleep_Duration, df$IPK), 3)
+r_study    <- round(cor(df$Study_Hours, df$IPK), 3)
+best_r2_pct <- round(max(model_comparison$R2) * 100, 1)
+best_rmse   <- round(min(model_comparison$RMSE), 4)
+```
+
+::: result-box
+## 🔍 Temuan Utama Penelitian
+
+### 1. Profil Responden
+
+-   **`r nrow(df)` mahasiswa** Sains Data ITERA berpartisipasi.
+-   Rata-rata IPK: **`r round(mean(df$IPK), 3)`** (SD: `r round(sd(df$IPK), 3)`).
+-   Mayoritas (`r round(sum(df$IPK >= 3.0)/nrow(df)*100, 1)`%) berada di kategori "Memuaskan" ke atas (IPK ≥ 3.00).
+
+### 2. Temuan PCA
+
+-   **`r n_pc_selected` komponen utama** dipilih berdasarkan kriteria Kaiser (eigenvalue ≥ 1).
+-   Komponen-komponen ini bersama-sama menjelaskan **`r round(eigenvalues[n_pc_selected, 3], 1)`%** total variansi data.
+-   **PC1 (Gangguan Digital Aktif)** adalah komponen terkuat — mencerminkan pola mahasiswa yang mudah terdistraksi oleh notifikasi dan cenderung mengecek HP secara refleks.
+-   **PC2 (Kapasitas Produktif)** mencerminkan kemampuan fokus mendalam (deep work) dan jam belajar mandiri.
+
+### 3. Temuan Pemodelan Shrinkage
+
+-   Model terbaik: **`r model_comparison$Model[1]`**
+    -   RMSE = **`r model_comparison$RMSE[1]`** (error prediksi rata-rata ≈ `r model_comparison$RMSE[1]` poin IPK)
+    -   R² = **`r model_comparison$R2_pct[1]`** variansi IPK berhasil dijelaskan
+-   **Lasso secara otomatis mengeliminasi** variabel yang tidak relevan, menunjukkan bahwa tidak semua distraksi digital berdampak sama terhadap IPK.
+
+### 4. Variabel Paling Berpengaruh terhadap IPK
+
+| Variabel                              | Korelasi dengan IPK |   Arah    |
+|:--------------------------------------|:-------------------:|:---------:|
+| Deep_Work_Dur (Durasi Fokus Mendalam) |    `r r_dw_ipk`     | ↑ Positif |
+| Study_Hours (Jam Belajar Mandiri)     |     `r r_study`     | ↑ Positif |
+| Sleep_Duration (Durasi Tidur)         |     `r r_sleep`     | ↑ Positif |
+| Screen_Time (Screen Time Harian)      |    `r r_st_ipk`     | ↓ Negatif |
+| Digital_Distraction_Index             |    `r r_ddi_ipk`    | ↓ Negatif |
+
+### 5. Rekomendasi Praktis
+
+-   📵 **Batasi notifikasi saat sesi belajar.** Mahasiswa dengan distraksi digital tinggi cenderung IPK-nya lebih rendah.
+-   ⏱️ **Latih sesi "deep work".** Kemampuan fokus tanpa interupsi lebih erat kaitannya dengan IPK dibanding total jam belajar.
+-   📱 **Waspadai screen time \> 8 jam/hari.** Data menunjukkan korelasi negatif yang konsisten dengan IPK.
+-   😴 **Jaga kualitas tidur.** Tidur cukup (≥7 jam) berkontribusi positif pada kapasitas kognitif.
+:::
+
+------------------------------------------------------------------------
+
+# Informasi Sesi R
+
+```{r session-info, echo=FALSE}
+sessionInfo()
+```
+
+------------------------------------------------------------------------
+
+::: result-box
+**KESIMPULAN KESELURUHAN HASIL ANALISIS :**
+
+Secara keseluruhan, analisis ini menunjukkan bahwa variabel-variabel distraksi digital dan produktivitas mahasiswa dapat diringkas melalui PCA menjadi tiga komponen utama, yaitu Gangguan Digital Aktif, Kapasitas & Durasi Produktif, serta Distraksi Pasif & Multitasking. Ketiga komponen tersebut mampu menjelaskan sekitar 70,3% variasi data, sehingga PCA berhasil membantu menyederhanakan struktur variabel yang cukup banyak menjadi pola utama yang lebih mudah dipahami.
+
+Pada tahap pemodelan shrinkage, beberapa model regularized regression dibandingkan, yaitu Ridge, Lasso, dan ElasticNet. Hasil terbaik diperoleh oleh Lasso dengan fitur original, dengan nilai RMSE = 0,4864 dan R² = 7,1%. Meskipun menjadi model terbaik dibandingkan model lain, nilai R² tersebut masih tergolong rendah. Hal ini menunjukkan bahwa variabel dalam penelitian ini hanya mampu menjelaskan sebagian kecil variasi IPK mahasiswa.
+
+Variabel yang paling konsisten muncul dalam model Lasso adalah Impulsive_Check, yaitu kebiasaan mengecek HP secara refleks. Koefisiennya bernilai negatif, sehingga semakin tinggi kecenderungan mahasiswa mengecek HP secara impulsif, IPK cenderung menurun. Namun, karena pengaruhnya relatif kecil dan kemampuan prediksi model rendah, hasil ini lebih tepat dipahami sebagai indikasi awal, bukan hubungan sebab-akibat yang kuat.
+
+Dengan demikian, fenomena The Focus Gap pada mahasiswa Sains Data ITERA dapat dikatakan muncul sebagai pola eksploratif, terutama pada aspek distraksi digital dan kebiasaan fokus. Akan tetapi, IPK tidak dapat dijelaskan hanya oleh faktor distraksi digital, karena masih banyak faktor lain yang kemungkinan berpengaruh, seperti motivasi belajar, kemampuan akademik, beban mata kuliah, kondisi psikologis, lingkungan belajar, dan manajemen waktu.
+:::
